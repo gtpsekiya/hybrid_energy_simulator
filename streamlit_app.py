@@ -2,65 +2,64 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="ハイブリッド節電シミュレーターV2", layout="wide")
-st.title("🔋 ハイブリッドマイクロインバーター節電シミュレーター V2")
+# ページ設定
+st.set_page_config(page_title="ハイブリッドマイクロインバーター節電シミュレーターV2", layout="wide")
+st.title("🔋 ハイブリッドマイクロインバーター節電シミュレーターV2")
+st.caption("時間帯別の電力使用に応じて最適モードを提案します（売電優先／蓄電優先／エコ）")
 
-st.markdown("""
-このアプリは、時間帯別の使用電力量から、節電モード別（売電優先／蓄電優先／エコ）に基づいて節電効果（kWh・金額）を計算・比較します。
-""")
+# ユーザー設定
+col1, col2, col3 = st.columns(3)
+with col1:
+    battery_kwh = st.selectbox("🔋蓄電池容量 (kWh)", [2, 4, 6, 8])
+with col2:
+    solar_output = st.slider("☀️ソーラー出力 (W)", 0, 4000, 1000)
+with col3:
+    price = st.number_input("💰電気代 (円/kWh)", 10, 100, 35)
 
-# 入力欄
-unit_price = st.sidebar.number_input("電気料金（円/kWh）", min_value=1, max_value=100, value=35)
-usage_kwh = []
-st.sidebar.markdown("### 時間帯別使用量（kWh）")
-for h in range(24):
-    usage_kwh.append(st.sidebar.slider(f"{h}:00-{h+1}:00", 0.0, 3.0, 1.0, 0.1))
+# 時間帯入力（24時間）
+st.markdown("### ⏱️時間別電力入力（W）")
+time_slots = [f"{i}:00–{i+1}:00" for i in range(24)]
+usage = {}
+for t in time_slots:
+    usage[t] = st.number_input(f"{t}", 0, 3000, 0, key=t)
 
-# モード別節電率
-modes = {
+# モード別変換効率
+eff = {
     "売電優先": 0.10,
     "蓄電優先": 0.20,
-    "エコモード": 0.30
+    "エコ": 0.30
 }
 
-# 使用前の合計
-total_before = sum(usage_kwh)
-
-# 結果計算
+# 結果の保存
 results = []
-mode_lines = {}
-for mode, reduction in modes.items():
-    usage_after = [round(v * (1 - reduction), 2) for v in usage_kwh]
-    total_after = sum(usage_after)
-    saved_kwh = total_before - total_after
-    saved_yen = round(saved_kwh * unit_price)
+
+for mode, eff_rate in eff.items():
+    total_kwh = sum(usage.values()) / 1000
+    saved = total_kwh * eff_rate
+    saved_yen = saved * price
     results.append({
         "モード": mode,
-        "節電量（kWh）": round(saved_kwh, 2),
-        "節電金額（円）": saved_yen,
-        "節約率": f"{int(reduction * 100)}%"
+        "総使用量 (kWh)": total_kwh,
+        "節電量 (kWh)": round(saved, 2),
+        "節電金額 (円)": round(saved_yen)
     })
-    mode_lines[mode] = usage_after
 
-# 表表示
-df_results = pd.DataFrame(results)
-st.subheader("📊 節電モード別 比較表")
-st.dataframe(df_results, use_container_width=True)
+# 表示
+st.markdown("### 📊 節電結果（モード別）")
+df = pd.DataFrame(results)
+st.dataframe(df, use_container_width=True)
 
 # グラフ
-st.subheader("📈 使用前 vs モード別 使用電力の比較")
-time_slots = [f"{h}:00-{h+1}:00" for h in range(24)]
-plt.figure(figsize=(12, 6))
-plt.plot(time_slots, usage_kwh, label="使用前", linestyle="--", color="black")
-for mode, line in mode_lines.items():
-    plt.plot(time_slots, line, label=f"{mode}（使用後）")
-plt.xticks(rotation=45)
-plt.ylabel("使用電力（kWh）")
-plt.title("時間帯別 使用前 vs 節電モード別 使用後の比較")
-plt.legend()
-plt.grid(True)
-st.pyplot(plt)
+st.markdown("### 📈 モード別節電金額グラフ")
+fig, ax = plt.subplots()
+ax.bar(df["モード"], df["節電金額 (円)"], color=["skyblue", "orange", "green"])
+ax.set_ylabel("節電金額 (円)")
+ax.set_title("モード別 節電効果比較")
+st.pyplot(fig)
 
-# 合計
-st.subheader("🔎 合計使用量と節電効果")
-st.markdown(f"**使用前合計**：{round(total_before, 2)} kWh")
+# 使用前 vs 使用後
+st.markdown("### 🔍 使用前 vs 使用後（エコモード基準）")
+before = sum(usage.values()) / 1000 * price
+after = before - df[df["モード"] == "エコ"]["節電金額 (円)"].values[0]
+st.metric("使用前電気代 (円)", round(before))
+st.metric("使用後電気代 (円)", round(after))
