@@ -1,100 +1,67 @@
-# streamlit_app.py (V4)
+import zipfile
+import os
+
+# Create the new V5 Streamlit app code (as a simple example)
+streamlit_code = """
 import streamlit as st
 import pandas as pd
 
-st.set_page_config(page_title="ハイブリッドマイクロインバーター節電V4", layout="wide")
-st.title("🔋 ハイブリッドマイクロインバーター節電シミュレーター V4")
+st.set_page_config(page_title="ハイブリッドマイクロインバーター節電シミュレーター V5", layout="wide")
 
-# --- 設定入力 ---
-st.sidebar.header("🔧 システム設定")
-scenario = st.sidebar.selectbox("使用シナリオ", ["自宅", "オフィス", "手動入力"])
-battery_capacity = st.sidebar.selectbox("蓄電池容量 (kWh)", [2, 4, 6, 8])
-solar_power = st.sidebar.slider("ソーラー出力上限 (W)", 0, 4000, 1000, step=100)
-electricity_cost = st.sidebar.number_input("電気代 (円/kWh)", min_value=1, max_value=100, value=35)
-st.sidebar.markdown("---")
+st.title("🔋 ハイブリッドマイクロインバーター節電シミュレーター V5")
+st.markdown("マイクロインバーター＋蓄電池＋ソーラーの運用による節電効果を時間別に計算し、Before/Afterで比較します。")
 
-st.sidebar.header("⚙️ エコモード設定")
-eco_start = st.sidebar.slider("エコモード開始 (時)", 0, 23, 23)
-eco_end = st.sidebar.slider("エコモード終了 (時)", 1, 24, 6)
-st.sidebar.markdown("※この時間帯だけ電力会社から充電を許可")
+battery_capacity = st.selectbox("蓄電池容量（kWh）", [2, 4, 6, 8])
+solar_power = st.slider("ソーラー出力（W）", 0, 4000, 1000, step=100)
+electricity_cost = st.number_input("電力会社の電気代（円/kWh）", min_value=5.0, max_value=60.0, value=35.0, step=0.1)
 
-# --- データ準備 ---
-time_slots = [f"{h}:00-{h+1}:00" for h in range(24)]
-default_profile = {
-    "自宅":  [0.3]*6 + [0.6]*2 + [0.4]*4 + [0.8]*5 + [1.0]*4 + [0.6]*3,
-    "オフィス": [0.2]*8 + [1.2]*8 + [0.2]*8
-}
+time_slots = [f"{i}:00-{i+1}:00" for i in range(24)]
+default_usage = [0]*24
 
-data = pd.DataFrame({"時間帯": time_slots})
+st.subheader("📥 時間別使用電力（W）を入力")
+electricity_input = st.data_editor(pd.DataFrame({
+    "時間帯": time_slots,
+    "使用電力 (W)": default_usage,
+}), use_container_width=True)
 
-if scenario != "手動入力":
-    data["使用電力 (kWh)"] = default_profile[scenario]
-else:
-    uploaded_file = st.file_uploader("またはCSVファイルをアップロード (時間帯,使用電力)", type="csv")
-    if uploaded_file:
-        user_data = pd.read_csv(uploaded_file)
-        data = user_data.copy()
-    else:
-        data["使用電力 (kWh)"] = [0.0]*24
-        data["使用電力 (kWh)"] = st.data_editor(data)["使用電力 (kWh)"]
+if st.button("⚡ シミュレーション開始"):
+    df = electricity_input
+    df["使用電力 (kWh)"] = df["使用電力 (W)"] / 1000
 
-# --- シミュレーション処理 ---
-def simulate(df):
-    result = []
-    battery = battery_capacity
-    for i, row in df.iterrows():
-        usage = row["使用電力 (kWh)"]
-        hour = i
-        solar = min(solar_power * 1 / 1000, usage)  # 仮に1時間定格発電
-        usage -= solar
-        from_battery = 0
-        from_grid = 0
+    df["蓄電池からの供給 (kWh)"] = 0.0
+    df["ソーラーからの供給 (kWh)"] = 0.0
+    df["電力会社から購入 (kWh)"] = 0.0
 
-        # バッテリーから供給
-        if battery >= usage:
-            from_battery = usage
-            battery -= usage
-            usage = 0
-        else:
-            from_battery = battery
-            usage -= battery
-            battery = 0
+    remaining_battery = battery_capacity
+    for i in range(24):
+        use = df.loc[i, "使用電力 (kWh)"]
+        solar = solar_power / 1000 if 7 <= i <= 16 else 0  # 7時〜16時発電
+        from_solar = min(solar, use)
+        remaining = use - from_solar
 
-        # 電力会社（エコモード充電考慮）
-        from_grid = usage
-        if eco_start <= hour or hour < eco_end:
-            charge = min(battery_capacity - battery, 1.0)
-            battery += charge
-            from_grid += charge
+        from_battery = min(remaining_battery, remaining)
+        remaining -= from_battery
+        from_grid = remaining
 
-        result.append([solar, from_battery, from_grid])
+        df.loc[i, "ソーラーからの供給 (kWh)"] = from_solar
+        df.loc[i, "蓄電池からの供給 (kWh)"] = from_battery
+        df.loc[i, "電力会社から購入 (kWh)"] = from_grid
+        remaining_battery -= from_battery
 
-    result_df = pd.DataFrame(result, columns=["ソーラー", "蓄電池", "電力会社"])
-    return result_df
+    df["Before料金 (円)"] = df["使用電力 (kWh)"] * electricity_cost
+    df["After料金 (円)"] = df["電力会社から購入 (kWh)"] * electricity_cost
+    df["節電額 (円)"] = df["Before料金 (円)"] - df["After料金 (円)"]
 
-# --- 計算＆表示 ---
-if st.button("🚀 シミュレーション開始"):
-    result_df = simulate(data)
-    merged = pd.concat([data, result_df], axis=1)
-    merged["節電額 (円)"] = merged["電力会社"] * electricity_cost
+    st.success("✅ 結果表示")
+    st.dataframe(df[["時間帯", "使用電力 (kWh)", "ソーラーからの供給 (kWh)", "蓄電池からの供給 (kWh)", "電力会社から購入 (kWh)", "節電額 (円)"]])
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("📊 Before（電力会社のみ）")
-        before_total = data["使用電力 (kWh)"].sum()
-        before_cost = before_total * electricity_cost
-        st.metric("合計電力", f"{before_total:.2f} kWh")
-        st.metric("電気料金 (推定)", f"{before_cost:.0f} 円")
+    st.subheader("💰 節電効果グラフ")
+    st.bar_chart(df.set_index("時間帯")[["節電額 (円)"]])
+"""
 
-    with col2:
-        st.subheader("✅ After（ハイブリッド）")
-        after_cost = merged["節電額 (円)"].sum()
-        saved = before_cost - after_cost
-        st.metric("節電後電気料金", f"{after_cost:.0f} 円")
-        st.metric("節約額", f"{saved:.0f} 円")
+# Save to Python file
+file_path = "/mnt/data/streamlit_app.py"
+with open(file_path, "w", encoding="utf-8") as f:
+    f.write(streamlit_code)
 
-    st.markdown("---")
-    st.subheader("⏱ 時間別使用電力と節電額")
-    st.dataframe(merged[["時間帯", "使用電力 (kWh)", "ソーラー", "蓄電池", "電力会社", "節電額 (円)"]], use_container_width=True)
-
-    st.bar_chart(merged[["ソーラー", "蓄電池", "電力会社"]])
+file_path
